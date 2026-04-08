@@ -63,9 +63,25 @@ func nodeLabelMatches(rule string, nodeLabels map[string]string) bool {
 		return ok && actual == v
 	}
 
-	_, ok := nodeLabels[rule]
+	if _, ok := nodeLabels[rule]; ok {
+		return true
+	}
 
-	return ok
+	// OpenShift uses node-role.kubernetes.io/control-plane on newer releases; older
+	// PtpConfig recommend rules may only mention node-role.kubernetes.io/master.
+	if rule == "node-role.kubernetes.io/master" {
+		_, ok := nodeLabels["node-role.kubernetes.io/control-plane"]
+
+		return ok
+	}
+
+	if rule == "node-role.kubernetes.io/control-plane" {
+		_, ok := nodeLabels["node-role.kubernetes.io/master"]
+
+		return ok
+	}
+
+	return false
 }
 
 func recommendPriority(rec ptpv1.PtpRecommend) int64 {
@@ -167,6 +183,57 @@ func pickUbloxFromPtpConfig(ptpConfig *ptpv1.PtpConfig, nodeName string, nodeLab
 	return pickFromRecommendByNodeLabel(ptpConfig, nodeLabels, recs)
 }
 
+func ptpConfigFromBuilder(cfg *infraptp.PtpConfigBuilder) *ptpv1.PtpConfig {
+	if cfg == nil {
+		return nil
+	}
+
+	if cfg.Object != nil {
+		return cfg.Object
+	}
+
+	return cfg.Definition
+}
+
+// lastResortUbloxVersion handles clusters where Status.MatchList is not yet populated
+// but a single Intel GNSS profile (e.g. grandmaster) exists, or recommend rules omit workers.
+func lastResortUbloxVersion(ptpConfigs []*infraptp.PtpConfigBuilder) (string, bool) {
+	intelCount := 0
+
+	var lastVer string
+
+	for _, cfg := range ptpConfigs {
+		pc := ptpConfigFromBuilder(cfg)
+		if pc == nil {
+			continue
+		}
+
+		for i := range pc.Spec.Profile {
+			if v, ok := UbloxProtocolFromPlugins(pc.Spec.Profile[i].Plugins); ok {
+				intelCount++
+				lastVer = v
+			}
+		}
+	}
+
+	if intelCount == 1 {
+		return lastVer, true
+	}
+
+	for _, cfg := range ptpConfigs {
+		pc := ptpConfigFromBuilder(cfg)
+		if pc == nil {
+			continue
+		}
+
+		if v, ok := ubloxFromProfileName(pc, "grandmaster"); ok {
+			return v, true
+		}
+	}
+
+	return "", false
+}
+
 // GetUbloxProtocolVersion returns ubxtool -P based on the PtpConfig profile applied to nodeName.
 func GetUbloxProtocolVersion(apiClient *clients.Settings, nodeName string) (string, error) {
 	ptpConfigs, err := infraptp.ListPtpConfigs(apiClient)
@@ -182,11 +249,7 @@ func GetUbloxProtocolVersion(apiClient *clients.Settings, nodeName string) (stri
 	nodeLabels := nodeBuilder.Object.Labels
 
 	for _, cfg := range ptpConfigs {
-		ptpConfig := cfg.Object
-		if ptpConfig == nil {
-			ptpConfig = cfg.Definition
-		}
-
+		ptpConfig := ptpConfigFromBuilder(cfg)
 		if ptpConfig == nil {
 			continue
 		}
@@ -194,6 +257,10 @@ func GetUbloxProtocolVersion(apiClient *clients.Settings, nodeName string) (stri
 		if v, ok := pickUbloxFromPtpConfig(ptpConfig, nodeName, nodeLabels); ok {
 			return v, nil
 		}
+	}
+
+	if v, ok := lastResortUbloxVersion(ptpConfigs); ok {
+		return v, nil
 	}
 
 	return "", fmt.Errorf(

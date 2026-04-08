@@ -25,11 +25,12 @@ ptp_iperf3_client_bind: ""
 ptp_iperf3_duration_sec: 300
 # Optional wait (seconds) before Case 06/07 for stable lock; production often uses 1800+.
 ptp_locked_state_wait_sec: 0
-# Case 07 tc netem device; leave empty to skip Case 07 unless set (e.g. ens1f0).
+# Case 07 tc netem device; empty = infer primary from WPC plan (logs or sync list). For gm-3card + phc2sys -s ens3f0,
+# set ptp_wpc_primary_interface: "ens3f0" or ptp_wpc_sync_interfaces: "ens1f0,ens2f0,ens3f0" if inference is wrong.
 ptp_netem_interface: ""
 # Case 01/02: comma-separated PHC ifaces with s2 (e.g. ens1f0,ens2f0,ens3f0); empty = infer from linuxptp logs.
 ptp_wpc_sync_interfaces: ""
-# Optional; when empty defaults to last name in ptp_wpc_sync_interfaces (or inferred list).
+# Optional; when empty defaults to last name in ptp_wpc_sync_interfaces (or inferred list). gm-3card GM: often ens3f0.
 ptp_wpc_primary_interface: ""
 
 # BMC credentials map for tests requiring BMC access (e.g., NMIKernelCrashKdump).

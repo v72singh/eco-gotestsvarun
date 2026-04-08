@@ -241,9 +241,9 @@ var _ = Describe(
 			reportxml.ID("99995"), func() {
 				for _, nodeName := range ptpNodes {
 					protocolVersion, err := sysptp.GetUbloxProtocolVersion(APIClient, nodeName)
-					if err != nil {
-						Skip("GNSS simulation requires PtpConfig with e810/e825/e830 for node " + nodeName + ": " + err.Error())
-					}
+					Expect(err).ToNot(HaveOccurred(),
+						"GNSS simulation needs Intel e810/e825/e830 PtpConfig (ubxtool -P); node %s: %v",
+						nodeName, err)
 
 					By("Verify clock status after GNSS signal loss, then after restore")
 
@@ -325,9 +325,7 @@ var _ = Describe(
 			})
 
 		It("Case 06: PTP Accuracy under high network throughput", reportxml.ID("99996"), func() {
-			if strings.TrimSpace(RanDuTestConfig.PtpIperf3Server) == "" {
-				Skip("Case 06 requires ptp_iperf3_server (ECO_RANDU_PTP_IPERF3_SERVER) pointing at an iperf3 server")
-			}
+			const localIperfPort = "5202"
 
 			dur := RanDuTestConfig.PtpIperf3DurationSec
 			if dur <= 0 {
@@ -347,11 +345,45 @@ var _ = Describe(
 					sysptp.DefaultMaxAbsOffsetNS, nodeName))
 
 				srv := strings.TrimSpace(RanDuTestConfig.PtpIperf3Server)
+				useLocalIperf := srv == ""
+
+				if useLocalIperf {
+					By("ECO_RANDU_PTP_IPERF3_SERVER unset: using node-local iperf3 server on 127.0.0.1")
+
+					startSrv := fmt.Sprintf(
+						"setsid iperf3 -s -p %s </dev/null >/tmp/eco-ptp-iperf-srv.log 2>&1 & echo $!",
+						localIperfPort,
+					)
+
+					out, err := sysptp.ExecCmdOnNodeHost(APIClient, nodeName, startSrv)
+					Expect(err).ToNot(HaveOccurred(), "failed to start iperf3 server on node %s: %s", nodeName, out)
+
+					srvPid := strings.TrimSpace(out)
+					if idx := strings.LastIndex(srvPid, "\n"); idx >= 0 {
+						srvPid = strings.TrimSpace(srvPid[idx+1:])
+					}
+
+					srvPidCopy := srvPid
+
+					DeferCleanup(func() {
+						killSrv := fmt.Sprintf("kill %s 2>/dev/null || true", sysptp.ShellQuoteArg(srvPidCopy))
+						_, _ = sysptp.ExecCmdOnNodeHost(APIClient, nodeName, killSrv)
+					})
+
+					time.Sleep(2 * time.Second)
+
+					srv = "127.0.0.1"
+				}
 
 				iperfParts := []string{
 					"setsid", "iperf3", "-c", sysptp.ShellQuoteArg(srv), "-t", strconv.Itoa(dur),
 				}
-				if b := strings.TrimSpace(RanDuTestConfig.PtpIperf3ClientBind); b != "" {
+
+				if useLocalIperf {
+					iperfParts = append(iperfParts, "-p", localIperfPort)
+				}
+
+				if b := strings.TrimSpace(RanDuTestConfig.PtpIperf3ClientBind); b != "" && !useLocalIperf {
 					iperfParts = append(iperfParts, "-B", sysptp.ShellQuoteArg(b))
 				}
 
@@ -429,8 +461,32 @@ var _ = Describe(
 		It("Case 07: Robustness against PTP packet loss", reportxml.ID("99997"), func() {
 			iface := strings.TrimSpace(RanDuTestConfig.PtpNetemInterface)
 			if iface == "" {
-				Skip("Case 07 requires ptp_netem_interface (ECO_RANDU_PTP_NETEM_INTERFACE)")
+				logText := ""
+
+				if len(ptpNodes) > 0 {
+					daemonPod, err := sysptp.GetLinuxptpDaemonPodOnNode(APIClient, ptpNodes[0])
+					if err == nil {
+						logs, logErr := daemonPod.GetLogsWithOptions(&corev1.PodLogOptions{
+							Container: sysptp.DaemonContainerName,
+							TailLines: ptr(int64(2000)),
+						})
+						if logErr == nil {
+							logText = string(logs)
+						}
+					}
+				}
+
+				plan, err := sysptp.ResolveWPCInterfaces(
+					RanDuTestConfig.PtpWpcSyncInterfaces,
+					RanDuTestConfig.PtpWpcPrimaryInterface,
+					logText,
+				)
+				Expect(err).ToNot(HaveOccurred(),
+					"Case 07: set ECO_RANDU_PTP_NETEM_INTERFACE or WPC sync envs, or ensure logs show ens* with s2")
+				iface = plan.Primary
 			}
+
+			Expect(iface).NotTo(BeEmpty(), "resolved netem interface is empty")
 
 			waitSec := RanDuTestConfig.PtpLockedStateWaitSec
 			if waitSec > 0 {
