@@ -221,20 +221,10 @@ var _ = Describe(
 			for _, nodeName := range ptpNodes {
 				By("Verify correct PTP class and grandmaster announce from linuxptp pod")
 
-				daemonPod, err := sysptp.GetLinuxptpDaemonPodOnNode(APIClient, nodeName)
-				Expect(err).ToNot(HaveOccurred(), "Failed to get PTP daemon pod on node %s", nodeName)
-
-				// Run pmc only (no shell grep). A pipeline `pmc | grep` exits 1 when grep finds
-				// no lines, which makes exec fail before we can assert on output.
-				// linuxptp pmc expects PARENT_DATA_SET (underscore before SET), not PARENT_DATASET.
-				pmcParent := "pmc -u -b 0 'GET PARENT_DATA_SET' 2>&1"
-				buf, err := daemonPod.ExecCommand(
-					[]string{"sh", "-c", pmcParent},
-					sysptp.DaemonContainerName,
-				)
-				Expect(err).ToNot(HaveOccurred(), "Failed to execute pmc on node %s", nodeName)
-
-				output := buf.String()
+				// pmc must use -f /var/run/ptp4l.<n>.config so the UDS matches ptp4l; without -f only
+				// "sending: GET PARENT_DATA_SET" is printed. Try each config until gm.ClockClass appears.
+				output, err := sysptp.PmcGetParentDataSet(APIClient, nodeName)
+				Expect(err).ToNot(HaveOccurred(), "Failed to execute pmc GET PARENT_DATA_SET on node %s", nodeName)
 
 				Expect(output).To(ContainSubstring("gm.ClockClass"),
 					"Node %s: no gm.ClockClass in pmc output", nodeName)
@@ -464,19 +454,15 @@ var _ = Describe(
 
 				time.Sleep(10 * time.Second)
 
-				daemonPod, err := sysptp.GetLinuxptpDaemonPodOnNode(APIClient, nodeName)
-				Expect(err).ToNot(HaveOccurred())
-
-				pmcTimeStatus := "pmc -u -b 0 'GET TIME_STATUS_NP' 2>/dev/null"
-				buf, err := daemonPod.ExecCommand(
-					[]string{"sh", "-c", pmcTimeStatus},
-					sysptp.DaemonContainerName,
-				)
+				pmcRaw, err := sysptp.PmcGetTimeStatusNP(APIClient, nodeName)
 				Expect(err).ToNot(HaveOccurred(), "pmc GET TIME_STATUS_NP on node %s", nodeName)
 
-				pmcOut := strings.ToLower(buf.String())
+				pmcOut := strings.ToLower(pmcRaw)
 				Expect(pmcOut).ToNot(ContainSubstring(sysptp.LogKeywordFreerun),
 					"node %s: TIME_STATUS_NP should not indicate freerun under 5%% loss", nodeName)
+
+				daemonPod, err := sysptp.GetLinuxptpDaemonPodOnNode(APIClient, nodeName)
+				Expect(err).ToNot(HaveOccurred())
 
 				logs, err := daemonPod.GetLogsWithOptions(&corev1.PodLogOptions{
 					Container: sysptp.DaemonContainerName,
