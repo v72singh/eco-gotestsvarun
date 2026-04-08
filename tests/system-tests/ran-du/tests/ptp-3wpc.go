@@ -228,9 +228,12 @@ var _ = Describe(
 
 				Expect(output).To(ContainSubstring("gm.ClockClass"),
 					"Node %s: no gm.ClockClass in pmc output", nodeName)
-				Expect(output).To(ContainSubstring("gm.ClockClass "+ptp3WpcExpectedClockClass),
-					"Node %s: expected gm.ClockClass 6, got: %s. "+
-						"ClockClass 7 or higher indicates node is not a synchronized Grandmaster", nodeName, output)
+				// pmc column-aligns values; the class is not adjacent as "gm.ClockClass 6" (single space).
+				clockClassLine := fmt.Sprintf(`gm\.ClockClass\s+%s`, regexp.QuoteMeta(ptp3WpcExpectedClockClass))
+				Expect(output).To(MatchRegexp(clockClassLine),
+					"Node %s: expected gm.ClockClass %s in pmc output, got: %s. "+
+						"ClockClass 7 or higher indicates node is not a synchronized Grandmaster",
+					nodeName, ptp3WpcExpectedClockClass, output)
 			}
 		})
 
