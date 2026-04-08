@@ -350,8 +350,10 @@ var _ = Describe(
 				if useLocalIperf {
 					By("ECO_RANDU_PTP_IPERF3_SERVER unset: using node-local iperf3 server on 127.0.0.1")
 
+					// Use nohup, not setsid: with "setsid iperf3 ... &", $! is the setsid PID, which exits
+					// immediately while iperf3 keeps running — ps then fails and the client log stays empty.
 					startSrv := fmt.Sprintf(
-						"setsid iperf3 -s -p %s </dev/null >/tmp/eco-ptp-iperf-srv.log 2>&1 & echo $!",
+						"nohup iperf3 -s -p %s >>/tmp/eco-ptp-iperf-srv.log 2>&1 </dev/null & echo $!",
 						localIperfPort,
 					)
 
@@ -370,13 +372,24 @@ var _ = Describe(
 						_, _ = sysptp.ExecCmdOnNodeHost(APIClient, nodeName, killSrv)
 					})
 
-					time.Sleep(2 * time.Second)
+					waitSrv := fmt.Sprintf(
+						`i=0; while [ "$i" -lt 40 ]; do ss -tln 2>/dev/null | awk '{print $4}' | grep -qE ':%s$' && echo LISTEN_OK && exit 0; `+
+							`sleep 0.25; i=$((i+1)); done; echo LISTEN_FAIL; echo "--- /tmp/eco-ptp-iperf-srv.log ---"; `+
+							`cat /tmp/eco-ptp-iperf-srv.log 2>/dev/null; exit 0`,
+						localIperfPort,
+					)
+
+					listenOut, waitErr := sysptp.ExecCmdOnNodeHost(APIClient, nodeName, waitSrv)
+					Expect(waitErr).ToNot(HaveOccurred(), "wait for iperf3 listen on node %s", nodeName)
+					Expect(listenOut).To(ContainSubstring("LISTEN_OK"),
+						"iperf3 server did not bind :%s on node %s (install iperf3 on hosts?); output=%q",
+						localIperfPort, nodeName, listenOut)
 
 					srv = "127.0.0.1"
 				}
 
 				iperfParts := []string{
-					"setsid", "iperf3", "-c", sysptp.ShellQuoteArg(srv), "-t", strconv.Itoa(dur),
+					"nohup", "iperf3", "-c", sysptp.ShellQuoteArg(srv), "-t", strconv.Itoa(dur),
 				}
 
 				if useLocalIperf {
