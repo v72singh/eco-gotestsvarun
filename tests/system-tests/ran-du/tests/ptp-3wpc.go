@@ -224,7 +224,9 @@ var _ = Describe(
 				daemonPod, err := sysptp.GetLinuxptpDaemonPodOnNode(APIClient, nodeName)
 				Expect(err).ToNot(HaveOccurred(), "Failed to get PTP daemon pod on node %s", nodeName)
 
-				pmcParent := "pmc -u -b 0 'GET PARENT_DATASET' 2>/dev/null | grep 'gm.ClockClass'"
+				// Run pmc only (no shell grep). A pipeline `pmc | grep` exits 1 when grep finds
+				// no lines, which makes exec fail before we can assert on output.
+				pmcParent := "pmc -u -b 0 'GET PARENT_DATASET' 2>&1"
 				buf, err := daemonPod.ExecCommand(
 					[]string{"sh", "-c", pmcParent},
 					sysptp.DaemonContainerName,
