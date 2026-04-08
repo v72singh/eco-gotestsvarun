@@ -226,7 +226,8 @@ var _ = Describe(
 
 				// Run pmc only (no shell grep). A pipeline `pmc | grep` exits 1 when grep finds
 				// no lines, which makes exec fail before we can assert on output.
-				pmcParent := "pmc -u -b 0 'GET PARENT_DATASET' 2>&1"
+				// linuxptp pmc expects PARENT_DATA_SET (underscore before SET), not PARENT_DATASET.
+				pmcParent := "pmc -u -b 0 'GET PARENT_DATA_SET' 2>&1"
 				buf, err := daemonPod.ExecCommand(
 					[]string{"sh", "-c", pmcParent},
 					sysptp.DaemonContainerName,
